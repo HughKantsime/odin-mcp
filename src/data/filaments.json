@@ -1,0 +1,82 @@
+[
+  {
+    "slug": "pla",
+    "name": "PLA",
+    "density": 1.24,
+    "commonPriceRange": [15, 30],
+    "printTempRange": [190, 220],
+    "bedTempRange": [45, 65]
+  },
+  {
+    "slug": "petg",
+    "name": "PETG",
+    "density": 1.27,
+    "commonPriceRange": [18, 35],
+    "printTempRange": [220, 250],
+    "bedTempRange": [70, 85]
+  },
+  {
+    "slug": "abs",
+    "name": "ABS",
+    "density": 1.04,
+    "commonPriceRange": [17, 32],
+    "printTempRange": [230, 260],
+    "bedTempRange": [95, 110]
+  },
+  {
+    "slug": "asa",
+    "name": "ASA",
+    "density": 1.07,
+    "commonPriceRange": [20, 38],
+    "printTempRange": [235, 260],
+    "bedTempRange": [95, 110]
+  },
+  {
+    "slug": "tpu",
+    "name": "TPU (95A)",
+    "density": 1.21,
+    "commonPriceRange": [22, 45],
+    "printTempRange": [210, 240],
+    "bedTempRange": [30, 60]
+  },
+  {
+    "slug": "nylon",
+    "name": "Nylon (PA6/PA12)",
+    "density": 1.14,
+    "commonPriceRange": [35, 65],
+    "printTempRange": [250, 280],
+    "bedTempRange": [70, 100]
+  },
+  {
+    "slug": "pc",
+    "name": "Polycarbonate",
+    "density": 1.20,
+    "commonPriceRange": [35, 60],
+    "printTempRange": [260, 310],
+    "bedTempRange": [105, 120]
+  },
+  {
+    "slug": "pla-plus",
+    "name": "PLA+",
+    "density": 1.24,
+    "commonPriceRange": [18, 32],
+    "printTempRange": [200, 230],
+    "bedTempRange": [50, 65]
+  },
+  {
+    "slug": "cf-petg",
+    "name": "Carbon Fiber PETG",
+    "density": 1.30,
+    "commonPriceRange": [30, 55],
+    "printTempRange": [230, 260],
+    "bedTempRange": [75, 90]
+  },
+  {
+    "slug": "resin-standard",
+    "name": "Standard Resin (UV)",
+    "density": 1.12,
+    "commonPriceRange": [25, 45],
+    "printTempRange": [20, 30],
+    "bedTempRange": [0, 0]
+  }
+]
