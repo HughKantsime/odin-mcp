@@ -81,9 +81,26 @@ function loadJson<T>(filename: string): T {
     try {
       return JSON.parse(readFileSync(altPath, "utf-8"));
     } catch {
-      throw new Error(`Could not load data file: ${filename}`);
+      // M6 from 2026-04-12 review: don't leak filesystem paths or stack
+      // traces through the thrown Error — stderr of an MCP stdio server
+      // is often surfaced in host debug panes.
+      throw new Error(`data-file-unavailable: ${filename}`);
     }
   }
+}
+
+/**
+ * Redact sensitive substrings (absolute paths, home dirs, stack frame
+ * references) from an error message before emitting to stderr.
+ * M6 from 2026-04-12 review.
+ */
+function sanitizeErrorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  return raw
+    .replace(/\/Users\/[^\s:]+/g, "<redacted-path>")
+    .replace(/\/home\/[^\s:]+/g, "<redacted-path>")
+    .replace(/\/private\/[^\s:]+/g, "<redacted-path>")
+    .replace(/at\s+[^\s]+\s*\([^)]+\)/g, "<stack>");
 }
 
 const printers: Printer[] = loadJson("printers.json");
@@ -104,7 +121,17 @@ server.registerTool("calculate_print_cost", {
   description:
     "Calculate the true cost of a 3D printed part including material, electricity, depreciation, labor, and failure rate",
   inputSchema: {
-    printer_model: z.string().max(256).optional().describe("Printer model name"),
+    // M1 from 2026-04-12 adversarial review: reject empty and whitespace-only
+    // printer_model. Prior: `""` matched every printer name via .includes()
+    // substring match, silently returning Bambu X1C defaults to the LLM as
+    // if they were authoritative for an unspecified printer.
+    printer_model: z
+      .string()
+      .max(256)
+      .transform((s) => s.trim())
+      .refine((s) => s.length > 0, { message: "printer_model must not be empty or whitespace" })
+      .optional()
+      .describe("Printer model name"),
     filament_type: z
       .enum(["PLA", "PETG", "ABS", "ASA", "TPU", "Nylon"])
       .describe("Filament type"),
@@ -220,9 +247,15 @@ server.registerTool("compare_farm_software", {
       .min(1)
       .max(10000)
       .describe("Number of printers in your farm"),
+    // M4 from 2026-04-12 adversarial review: normalize case and dedupe.
+    // Prior: ["moonraker", "Moonraker", "moonraker"] would inflate the
+    // protocol-match score because the raw array was used for both
+    // .filter() and .length, and case-variants bypassed the protocol list's
+    // exact-match.
     protocols_needed: z
-      .array(z.string().max(64))
+      .array(z.string().max(64).transform((s) => s.toLowerCase().trim()))
       .max(20)
+      .transform((arr) => Array.from(new Set(arr.filter((s) => s.length > 0))))
       .optional()
       .describe(
         "Printer protocols needed (bambu-mqtt, moonraker, prusalink, elegoo-sdcp)"
@@ -251,7 +284,41 @@ server.registerTool("compare_farm_software", {
     featureCount: number;
   }
 
-  const scored: ScoredCompetitor[] = competitors.map((c) => {
+  // M3 from 2026-04-12 adversarial review: apply hard requirements as
+  // filters BEFORE scoring, not as soft score nudges. Prior: protocols_needed
+  // and self_hosted_required only contributed up to 30 + 15 points, so a
+  // platform missing a required protocol or SaaS-only platform could still
+  // rank top-3 with just a warning line — an LLM client is likely to trust
+  // the rank and underweight the warning. Now platforms that fail hard
+  // requirements are excluded entirely; if the filtered set is empty we
+  // return an explicit "no compatible platform" error.
+  const eligible = competitors.filter((c) => {
+    // Hard filter: self-hosted required → non-self-hosted SaaS excluded
+    if (self_hosted_required && !c.selfHosted) return false;
+    // Hard filter: all requested protocols must be supported (normalized
+    // via Zod transform above, so includes() comparison is case-safe).
+    if (protocols_needed && protocols_needed.length > 0) {
+      const competitorProtos = c.protocols.map((p) => p.toLowerCase());
+      for (const needed of protocols_needed) {
+        if (!competitorProtos.includes(needed)) return false;
+      }
+    }
+    return true;
+  });
+
+  if (eligible.length === 0) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `No compatible platform found. Constraints: ${protocols_needed?.length ? `protocols=[${protocols_needed.join(", ")}]` : ""}${self_hosted_required ? " self_hosted=true" : ""}. Relax a constraint or review the supported-protocol matrix at https://runsodin.com/compare.`,
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  const scored: ScoredCompetitor[] = eligible.map((c) => {
     let score = 0;
 
     // Calculate monthly cost at this printer count
@@ -264,21 +331,22 @@ server.registerTool("compare_farm_software", {
       monthlyCost = 0;
     }
 
-    // Protocol match
-    let protocolMatch = true;
+    // Protocol match: now always 100% by construction (filtered above).
+    // We retain a scoring contribution proportional to breadth of extra
+    // protocol support, not match percentage.
+    const protocolMatch = true;
     if (protocols_needed && protocols_needed.length > 0) {
-      const matched = protocols_needed.filter((p) =>
-        c.protocols.includes(p)
-      );
-      protocolMatch = matched.length === protocols_needed.length;
-      score += (matched.length / protocols_needed.length) * 30;
+      score += 30; // satisfied all required protocols
+      // Bonus for extras beyond the required set
+      const competitorProtos = c.protocols.map((p) => p.toLowerCase());
+      const extras = competitorProtos.filter((p) => !protocols_needed.includes(p));
+      score += Math.min(extras.length, 5) * 2;
     } else {
       score += c.protocols.length * 5; // More protocols = better
     }
 
-    // Self-hosted match
-    const selfHostedMatch =
-      !self_hosted_required || c.selfHosted;
+    // Self-hosted: now also always satisfied by construction when required.
+    const selfHostedMatch = !self_hosted_required || c.selfHosted;
     if (selfHostedMatch) score += 15;
 
     // Budget match
@@ -384,11 +452,24 @@ server.registerTool("recommend_printer_for_farm", {
   description:
     "Recommend the best 3D printer for a print farm based on use case, budget, and fleet requirements",
   inputSchema: {
+    // M2 from 2026-04-12 adversarial review: use an enum so the LLM can't
+    // smuggle in negations. Prior: the free-form string was matched as a
+    // bag of substrings against `bestFor`, so "not miniatures, cosplay"
+    // awarded printers tagged `miniatures` a +20 bonus — the opposite of
+    // the stated intent. Enum forces a single unambiguous category.
     use_case: z
-      .string()
-      .max(512)
+      .enum([
+        "production",
+        "prototyping",
+        "education",
+        "dental",
+        "miniatures",
+        "cosplay",
+        "functional",
+        "mixed",
+      ])
       .describe(
-        "Primary use case (production, prototyping, education, dental, miniatures, cosplay)"
+        "Primary use case. Choose exactly one category; no free-form text."
       ),
     budget_per_printer: z
       .number()
@@ -397,7 +478,13 @@ server.registerTool("recommend_printer_for_farm", {
       .optional()
       .describe("Maximum budget per printer in USD"),
     existing_fleet: z
-      .array(z.string().max(256))
+      .array(
+        z
+          .string()
+          .max(256)
+          .transform((s) => s.trim())
+          .refine((s) => s.length > 0, { message: "existing_fleet entries must not be empty" }),
+      )
       .max(100)
       .optional()
       .describe("Printer models already owned"),
@@ -415,6 +502,25 @@ server.registerTool("recommend_printer_for_farm", {
   // Filter by budget
   if (budget_per_printer !== undefined) {
     candidates = candidates.filter((p) => p.price <= budget_per_printer);
+  }
+
+  // M5 from 2026-04-12 adversarial review: if budget (or any filter) emptied
+  // the candidate set, return an explicit structured error instead of a
+  // successful-looking empty recommendation. Prior: blank success let the
+  // LLM client improvise around no data as if it were authoritative.
+  if (candidates.length === 0) {
+    const constraintParts: string[] = [];
+    if (budget_per_printer !== undefined) constraintParts.push(`budget_per_printer=$${budget_per_printer}`);
+    constraintParts.push(`use_case=${use_case}`);
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `NO_FEASIBLE_SOLUTION: no printers match the given constraints (${constraintParts.join(", ")}). The dataset's cheapest ODIN-supported printer is $${Math.min(...printers.filter((p) => p.odinSupport !== "none").map((p) => p.price))}. Relax budget or use_case.`,
+        },
+      ],
+      isError: true,
+    };
   }
 
   // Score each printer
@@ -452,8 +558,8 @@ server.registerTool("recommend_printer_for_farm", {
         break;
     }
 
-    // Use case match
-    if (p.bestFor.some((b) => use_case.toLowerCase().includes(b))) {
+    // Use case match (M2: exact enum equality, not substring)
+    if (p.bestFor.some((b) => b.toLowerCase() === use_case.toLowerCase())) {
       score += 20;
       reasons.push(`Designed for ${use_case}`);
     }
@@ -544,10 +650,17 @@ server.registerTool("estimate_farm_capacity", {
   description:
     "Estimate monthly production capacity and utilization of a 3D print farm",
   inputSchema: {
+    // M1 from 2026-04-12 adversarial review: reject empty model strings
+    // which would substring-match every printer via .includes().
     printers: z
       .array(
         z.object({
-          model: z.string().max(256).describe("Printer model name"),
+          model: z
+            .string()
+            .max(256)
+            .transform((s) => s.trim())
+            .refine((s) => s.length > 0, { message: "model must not be empty or whitespace" })
+            .describe("Printer model name"),
           count: z.number().int().min(1).max(1000).describe("Number of this printer"),
           hours_per_day: z.number().min(0.1).max(24).describe("Operating hours per day"),
         })
@@ -709,6 +822,7 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error("Fatal error:", error);
+  // M6: sanitized single-line stderr — no stack, no absolute paths.
+  console.error(`[odin-mcp] fatal: ${sanitizeErrorMessage(error)}`);
   process.exit(1);
 });
