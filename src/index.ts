@@ -104,23 +104,29 @@ server.registerTool("calculate_print_cost", {
   description:
     "Calculate the true cost of a 3D printed part including material, electricity, depreciation, labor, and failure rate",
   inputSchema: {
-    printer_model: z.string().optional().describe("Printer model name"),
+    printer_model: z.string().max(256).optional().describe("Printer model name"),
     filament_type: z
       .enum(["PLA", "PETG", "ABS", "ASA", "TPU", "Nylon"])
       .describe("Filament type"),
-    filament_cost_per_kg: z.number().describe("Cost per kg of filament in USD"),
-    print_weight_grams: z.number().describe("Weight of the print in grams"),
-    print_time_hours: z.number().describe("Print time in hours"),
+    filament_cost_per_kg: z.number().min(0).max(10000).describe("Cost per kg of filament in USD"),
+    print_weight_grams: z.number().min(0.1).max(100000).describe("Weight of the print in grams"),
+    print_time_hours: z.number().min(0.01).max(9999).describe("Print time in hours"),
     electricity_rate_kwh: z
       .number()
+      .min(0)
+      .max(10)
       .default(0.12)
       .describe("Electricity rate in $/kWh"),
     labor_rate_per_hour: z
       .number()
+      .min(0)
+      .max(1000)
       .default(0)
       .describe("Labor rate in $/hour"),
     failure_rate_pct: z
       .number()
+      .min(0)
+      .max(99)
       .default(5)
       .describe("Expected failure rate as percentage"),
   },
@@ -163,8 +169,8 @@ server.registerTool("calculate_print_cost", {
   const depreciation = (printerPrice / lifespanHours) * print_time_hours;
   const laborCost = labor_rate_per_hour * print_time_hours;
   const subtotal = materialCost + electricityCost + depreciation + laborCost;
-  const failureBuffer =
-    subtotal * (failure_rate_pct / 100 / (1 - failure_rate_pct / 100));
+  const divisor = 1 - failure_rate_pct / 100;
+  const failureBuffer = divisor > 0 ? subtotal * (failure_rate_pct / 100 / divisor) : 0;
   const totalCost = subtotal + failureBuffer;
 
   const lines = [
@@ -210,9 +216,13 @@ server.registerTool("compare_farm_software", {
   inputSchema: {
     printer_count: z
       .number()
+      .int()
+      .min(1)
+      .max(10000)
       .describe("Number of printers in your farm"),
     protocols_needed: z
-      .array(z.string())
+      .array(z.string().max(64))
+      .max(20)
       .optional()
       .describe(
         "Printer protocols needed (bambu-mqtt, moonraker, prusalink, elegoo-sdcp)"
@@ -223,6 +233,8 @@ server.registerTool("compare_farm_software", {
       .describe("Whether self-hosted deployment is required"),
     budget_monthly: z
       .number()
+      .min(0)
+      .max(100000)
       .optional()
       .describe("Monthly budget in USD"),
   },
@@ -374,15 +386,19 @@ server.registerTool("recommend_printer_for_farm", {
   inputSchema: {
     use_case: z
       .string()
+      .max(512)
       .describe(
         "Primary use case (production, prototyping, education, dental, miniatures, cosplay)"
       ),
     budget_per_printer: z
       .number()
+      .min(0)
+      .max(100000)
       .optional()
       .describe("Maximum budget per printer in USD"),
     existing_fleet: z
-      .array(z.string())
+      .array(z.string().max(256))
+      .max(100)
       .optional()
       .describe("Printer models already owned"),
     priority: z
@@ -531,17 +547,23 @@ server.registerTool("estimate_farm_capacity", {
     printers: z
       .array(
         z.object({
-          model: z.string().describe("Printer model name"),
-          count: z.number().describe("Number of this printer"),
-          hours_per_day: z.number().describe("Operating hours per day"),
+          model: z.string().max(256).describe("Printer model name"),
+          count: z.number().int().min(1).max(1000).describe("Number of this printer"),
+          hours_per_day: z.number().min(0.1).max(24).describe("Operating hours per day"),
         })
       )
+      .min(1)
+      .max(100)
       .describe("Fleet composition"),
     avg_print_time_hours: z
       .number()
+      .min(0.01)
+      .max(720)
       .describe("Average print time in hours"),
     changeover_minutes: z
       .number()
+      .min(0)
+      .max(1440)
       .default(15)
       .describe("Time between prints in minutes"),
   },
@@ -580,7 +602,9 @@ server.registerTool("estimate_farm_capacity", {
 
     // Utilization: actual printing time vs available time
     const printingMinutes = printsPerDayPerUnit * avg_print_time_hours * 60;
-    const utilizationPct = (printingMinutes / availableMinutesPerDay) * 100;
+    const utilizationPct = availableMinutesPerDay > 0
+      ? (printingMinutes / availableMinutesPerDay) * 100
+      : 0;
 
     return {
       model: entry.model,
@@ -621,7 +645,9 @@ server.registerTool("estimate_farm_capacity", {
       sum + f.printsPerDayPerUnit * avg_print_time_hours * 60 * f.count,
     0
   );
-  const overallUtilization = (totalPrintingMinutes / totalAvailableMinutes) * 100;
+  const overallUtilization = totalAvailableMinutes > 0
+    ? (totalPrintingMinutes / totalAvailableMinutes) * 100
+    : 0;
 
   const lines = [
     `=== Farm Capacity Analysis ===`,

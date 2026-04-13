@@ -1,0 +1,50 @@
+name: Security & Code Quality
+
+# Security standard: every push/PR must pass secret scanning, dependency
+# audit, and type-checking. Type-check catches Zod schema bound regressions
+# that could open injection or DoS surface.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+defaults:
+  run:
+    shell: bash -eo pipefail {0}
+
+jobs:
+  secrets:
+    name: Secret Scanning
+    runs-on: macos-self-hosted
+    env:
+      PATH: /Users/ollama/homebrew/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+    steps:
+      - name: Checkout (full history for gitleaks)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: brew install gitleaks 2>/dev/null || true
+
+      - name: Run gitleaks
+        run: gitleaks detect --source . --verbose
+
+  audit:
+    name: Dependency Audit + Type Check
+    runs-on: macos-self-hosted
+    env:
+      PATH: /Users/ollama/homebrew/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: npm audit — moderate+
+        run: npm audit --audit-level=moderate
+
+      - name: Type check (catches Zod bound regressions)
+        run: npm run build
