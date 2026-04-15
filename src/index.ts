@@ -116,7 +116,7 @@ const server = new McpServer({
 // -------------------------------------------------------------------
 // Tool 1: calculate_print_cost
 // -------------------------------------------------------------------
-server.registerTool("calculate_print_cost", {
+server.registerTool("reference.calculate_print_cost", {
   title: "Print Cost Calculator",
   description:
     "Calculate the true cost of a 3D printed part including material, electricity, depreciation, labor, and failure rate",
@@ -236,7 +236,7 @@ server.registerTool("calculate_print_cost", {
 // -------------------------------------------------------------------
 // Tool 2: compare_farm_software
 // -------------------------------------------------------------------
-server.registerTool("compare_farm_software", {
+server.registerTool("reference.compare_farm_software", {
   title: "Farm Software Comparison",
   description:
     "Compare 3D print farm management platforms: ODIN vs SimplyPrint vs 3DPrinterOS vs OctoFarm vs Obico",
@@ -447,7 +447,7 @@ server.registerTool("compare_farm_software", {
 // -------------------------------------------------------------------
 // Tool 3: recommend_printer_for_farm
 // -------------------------------------------------------------------
-server.registerTool("recommend_printer_for_farm", {
+server.registerTool("reference.recommend_printer_for_farm", {
   title: "Farm Printer Recommender",
   description:
     "Recommend the best 3D printer for a print farm based on use case, budget, and fleet requirements",
@@ -645,7 +645,7 @@ server.registerTool("recommend_printer_for_farm", {
 // -------------------------------------------------------------------
 // Tool 4: estimate_farm_capacity
 // -------------------------------------------------------------------
-server.registerTool("estimate_farm_capacity", {
+server.registerTool("reference.estimate_farm_capacity", {
   title: "Farm Capacity Estimator",
   description:
     "Estimate monthly production capacity and utilization of a 3D print farm",
@@ -823,11 +823,9 @@ server.registerTool("estimate_farm_capacity", {
 // -------------------------------------------------------------------
 import { registerReadTools } from "./tools/read_tools.js";
 import { registerWriteTools } from "./tools/write_tools.js";
-import { registerReferenceTools } from "./tools/reference_tools.js";
 
 registerReadTools(server);
 registerWriteTools(server);
-registerReferenceTools(server);
 
 // Start the server
 async function main() {

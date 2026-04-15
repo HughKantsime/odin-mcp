@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.0.1] - 2026-04-14
+
+### Changed — reference tools renamed under `reference.*` namespace
+
+The four v1 reference calculators now carry an explicit `reference.`
+prefix so agents can tell at a glance which tools are offline-safe
+standalone math vs. live farm operations:
+
+- `calculate_print_cost` → `reference.calculate_print_cost`
+- `recommend_printer_for_farm` → `reference.recommend_printer_for_farm`
+- `estimate_farm_capacity` → `reference.estimate_farm_capacity`
+- `compare_farm_software` → `reference.compare_farm_software`
+
+Tool behavior is unchanged. Pin `@1` if your MCP client config still
+uses the un-namespaced IDs; upgrade to `@2.0.1` to get the 22 live
+tools plus the namespaced reference calculators.
+
+### Removed
+
+Dropped the empty `src/tools/reference_tools.ts` stub — the four
+reference tools are registered directly in `src/index.ts`.
+
 ## [2.0.0] - 2026-04-15
 
 ### Added — live agent surface (22 tools)

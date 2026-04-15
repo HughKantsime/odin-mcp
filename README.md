@@ -32,7 +32,7 @@ Wire into Claude Desktop (`claude_desktop_config.json`):
 }
 ```
 
-Agents can now use `calculate_print_cost`, `recommend_printer_for_farm`, `estimate_farm_capacity`, `compare_farm_software`.
+Agents can now use `reference.calculate_print_cost`, `reference.recommend_printer_for_farm`, `reference.estimate_farm_capacity`, `reference.compare_farm_software`.
 
 ### Live (connected to O.D.I.N.)
 
@@ -97,10 +97,10 @@ Every write tool accepts optional `dry_run` and `idempotency_key`.
 
 | Tool | Purpose |
 |------|---------|
-| `calculate_print_cost` | Material + electricity + depreciation + failure-rate math. |
-| `recommend_printer_for_farm` | Match printers to farm constraints. |
-| `estimate_farm_capacity` | Throughput forecasting. |
-| `compare_farm_software` | Feature matrix vs OctoFarm / Mainsail / Duet / etc. |
+| `reference.calculate_print_cost` | Material + electricity + depreciation + failure-rate math. |
+| `reference.recommend_printer_for_farm` | Match printers to farm constraints. |
+| `reference.estimate_farm_capacity` | Throughput forecasting. |
+| `reference.compare_farm_software` | Feature matrix vs OctoFarm / Mainsail / Duet / etc. |
 
 ---
 
@@ -159,9 +159,16 @@ Zero outbound packets. All tokens, prompts, and telemetry stay inside the compli
 
 ## Migration from v1
 
-v1 tools (`calculate_print_cost`, `recommend_printer_for_farm`, `estimate_farm_capacity`, `compare_farm_software`) continue to work unchanged. The v2 live tools are additive.
+v2.0.1 renames the four v1 tools into a `reference.*` namespace:
 
-If you pin `odin-print-farm-mcp@1` in your MCP client config, nothing breaks. Upgrade to `@2` to access the 22 live tools.
+| v1 | v2 |
+|----|----|
+| `calculate_print_cost` | `reference.calculate_print_cost` |
+| `recommend_printer_for_farm` | `reference.recommend_printer_for_farm` |
+| `estimate_farm_capacity` | `reference.estimate_farm_capacity` |
+| `compare_farm_software` | `reference.compare_farm_software` |
+
+The behavior of each tool is unchanged — only the identifier. Pin `odin-print-farm-mcp@1` if you need the un-namespaced IDs. Upgrade to `@2` to access the 22 live tools plus the namespaced reference calculators.
 
 ---
 
