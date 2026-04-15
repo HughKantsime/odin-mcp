@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.0.2] - 2026-04-15
+
+### Added — Skill package for Claude Code / OpenClaw / Cline
+
+Ships `skills/odin-farm/SKILL.md` — a ready-to-drop operator prompt
+pack that teaches local 32B LLMs the retry-safety rules that pair
+with the backend's idempotency/dry-run primitives.
+
+The skill enforces: read before writing, dry-run before commit, one
+action per turn, branch on structured `error.code`, never retry
+`validation_failed`, generate a fresh `idempotency_key` for each
+user-requested redo.
+
+Install: `cp -r node_modules/odin-print-farm-mcp/skills/odin-farm ~/.claude/skills/`.
+
 ## [2.0.1] - 2026-04-14
 
 ### Changed — reference tools renamed under `reference.*` namespace
