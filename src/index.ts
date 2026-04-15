@@ -125,6 +125,36 @@ const server = new McpServer({
   version: pkgVersion,
 });
 
+// Backward-compat aliases: v2.0.0 shipped the reference tools under
+// un-namespaced IDs. v2.0.1 renamed them into reference.*. To keep
+// 2.0.x a non-breaking patch line for any client that pinned @2 or
+// auto-upgrades, we register each reference tool under BOTH names.
+// The namespaced ID is canonical; the legacy ID is a transparent
+// alias that delegates to the same handler + schema.
+const LEGACY_REFERENCE_ALIASES: Record<string, string> = {
+  "reference.calculate_print_cost": "calculate_print_cost",
+  "reference.compare_farm_software": "compare_farm_software",
+  "reference.recommend_printer_for_farm": "recommend_printer_for_farm",
+  "reference.estimate_farm_capacity": "estimate_farm_capacity",
+};
+const _origRegisterTool = server.registerTool.bind(server);
+// Cast via unknown because the SDK's registerTool is a generic overload
+// we can't easily preserve through a prototype wrap.
+(server as unknown as { registerTool: Function }).registerTool = function (
+  id: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  config: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  handler: any,
+) {
+  const result = _origRegisterTool(id, config, handler);
+  const legacy = LEGACY_REFERENCE_ALIASES[id];
+  if (legacy) {
+    _origRegisterTool(legacy, config, handler);
+  }
+  return result;
+};
+
 // -------------------------------------------------------------------
 // Tool 1: calculate_print_cost
 // -------------------------------------------------------------------

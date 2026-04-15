@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.0.4] - 2026-04-15
+
+### Fixed — backward-compat for the 2.0.1 reference-tool rename
+
+Codex final-review P1: 2.0.1 renamed four reference tools into the
+`reference.*` namespace without keeping the un-namespaced IDs
+registered. Any MCP client pinned to `@2` or auto-upgrading within
+`2.0.x` would start hitting `tool not found` on the legacy names.
+
+Each reference tool is now registered under BOTH IDs (canonical
+namespaced ID + legacy un-namespaced ID) with the same schema and
+handler. Existing automations keep working; agents can migrate at
+their own pace. The namespaced IDs remain canonical.
+
+Tools exposed: 30 (11 live reads + 11 live writes + 4 canonical
+`reference.*` + 4 legacy aliases).
+
 ## [2.0.3] - 2026-04-15
 
 ### Fixed

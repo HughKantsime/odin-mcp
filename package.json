@@ -1,6 +1,6 @@
 {
   "name": "odin-print-farm-mcp",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "MCP server for 3D print farm operations — live tools for queue, jobs, printers, inventory, alerts, maintenance (v2); plus v1 reference tools for cost calculation, printer recommendations, farm capacity planning. Powered by O.D.I.N.",
   "license": "Apache-2.0",
   "type": "module",
