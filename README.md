@@ -172,6 +172,14 @@ The behavior of each tool is unchanged — only the identifier. Pin `odin-print-
 
 ---
 
+## Skill packages
+
+The `skills/` directory ships operator-ready prompt packs for Claude Code, OpenClaw, Cline, and other MCP clients. `odin-farm/SKILL.md` is the baseline "safe farm operator" rulebook — dry-run-first, branch on error codes, never batch cancellations. Drop it into `~/.claude/skills/` (Claude Code) or your client's skills directory, and a local 32B model will stop trying to cancel jobs without confirmation.
+
+See [`skills/README.md`](./skills/README.md) for install + customization.
+
+---
+
 ## Development
 
 ```bash
