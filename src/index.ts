@@ -107,10 +107,22 @@ const printers: Printer[] = loadJson("printers.json");
 const filaments: Filament[] = loadJson("filaments.json");
 const competitors: Competitor[] = loadJson("competitors.json");
 
+// Read package version from package.json so serverInfo stays in sync with npm
+const pkgVersion: string = (() => {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(join(__dirname, "..", "package.json"), "utf-8")
+    ) as { version?: string };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
+
 // Create the MCP server
 const server = new McpServer({
   name: "odin-print-farm-mcp",
-  version: "1.0.0",
+  version: pkgVersion,
 });
 
 // -------------------------------------------------------------------

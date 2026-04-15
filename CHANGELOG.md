@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.3] - 2026-04-15
+
+### Fixed
+
+- `serverInfo.version` was hardcoded to `"1.0.0"` — now read from
+  `package.json` at startup so MCP clients see the real package
+  version. Audit caught the drift against the tarball version.
+
 ## [2.0.2] - 2026-04-15
 
 ### Added — Skill package for Claude Code / OpenClaw / Cline
