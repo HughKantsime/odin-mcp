@@ -1,127 +1,191 @@
-# ODIN Print Farm MCP Server
+# odin-print-farm-mcp
 
-An MCP (Model Context Protocol) server that gives AI assistants expert knowledge about 3D print farm management. It provides cost calculators, printer recommendations, farm capacity planning, and software comparison tools — all powered by ODIN's database of 39 printers, 10 filament types, and 6 farm management platforms. Install it in Claude Desktop, Cursor, or any MCP-compatible client to get accurate print farm advice in your AI conversations.
+Model Context Protocol server for O.D.I.N. — drive an actual print farm with AI agents, or run the bundled reference calculators standalone.
 
-## Installation
+**v2** (2026-04-15) splits the surface in two:
 
-### Claude Desktop
+- **Live tools** (22) — agent-driven farm operation. Require a running O.D.I.N. instance + a scoped token. Queue jobs, pause printers, manage inventory, clear alerts, log maintenance, read the dashboard.
+- **Reference tools** (4) — standalone calculators. No ODIN deployment required. Print-cost math, printer recommendations, farm capacity planning, software comparison.
 
-Add to your `claude_desktop_config.json`:
+Both surfaces ship in the same npm package; the live tools error at invocation if `ODIN_BASE_URL` / `ODIN_API_KEY` aren't set, so the reference tools keep working for pre-sales and research use cases.
 
-```json
-{
-  "mcpServers": {
-    "odin-print-farm": {
-      "command": "npx",
-      "args": ["-y", "odin-print-farm-mcp"]
-    }
-  }
-}
-```
+---
 
-Config file locations:
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+## Quick Start
 
-### Cursor
-
-Add to your Cursor MCP settings (`.cursor/mcp.json` in your project or global config):
-
-```json
-{
-  "mcpServers": {
-    "odin-print-farm": {
-      "command": "npx",
-      "args": ["-y", "odin-print-farm-mcp"]
-    }
-  }
-}
-```
-
-### From Source
+### Standalone (reference tools only)
 
 ```bash
-git clone https://github.com/your-org/odin-mcp.git
+npx -y odin-print-farm-mcp@2
+```
+
+Wire into Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "odin-reference": {
+      "command": "npx",
+      "args": ["-y", "odin-print-farm-mcp@2"]
+    }
+  }
+}
+```
+
+Agents can now use `calculate_print_cost`, `recommend_printer_for_farm`, `estimate_farm_capacity`, `compare_farm_software`.
+
+### Live (connected to O.D.I.N.)
+
+1. Mint an API token in O.D.I.N. (**Settings → API Tokens → New Token**) with scope `agent:read` or `agent:write`.
+2. Export the env vars and wire the client:
+
+```json
+{
+  "mcpServers": {
+    "odin": {
+      "command": "npx",
+      "args": ["-y", "odin-print-farm-mcp@2"],
+      "env": {
+        "ODIN_BASE_URL": "http://192.168.1.100:8000",
+        "ODIN_API_KEY": "odin_xxxxxxxxxxxxxxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+All 26 tools are now available.
+
+---
+
+## Tools
+
+### Live reads (scope `agent:read` or higher)
+
+| Tool | Purpose |
+|------|---------|
+| `farm_summary` | One-shot dashboard: printer counts by state, queue depth, unread alerts, active jobs. Call this first to orient. |
+| `list_printers` | Fleet list, optional status filter. |
+| `get_printer` | Full status + telemetry + AMS + active job for one printer. |
+| `list_jobs` | Filter by status (pending / printing / completed / failed / cancelled). |
+| `get_job` | Full job record. |
+| `list_queue` | Pending jobs in priority order. |
+| `list_alerts` | Filter by severity + read state. |
+| `list_spools` | Filter by filament type / availability. |
+| `list_filaments` | Filament library. |
+| `list_maintenance_tasks` | Optional overdue-only filter. |
+| `list_orders` | Customer orders by status. |
+
+### Live writes (scope `agent:write` or admin)
+
+Every write tool accepts optional `dry_run` and `idempotency_key`.
+
+| Tool | Purpose |
+|------|---------|
+| `queue_job` | Add a job. |
+| `cancel_job` | Cancel a job. Requires reason on some endpoints. |
+| `approve_job` | Approve a submitted job. |
+| `reject_job` | Reject a job (reason required). |
+| `pause_printer` | Pause the active print. |
+| `resume_printer` | Resume a paused printer. |
+| `mark_alert_read` / `dismiss_alert` | Alert housekeeping. |
+| `assign_spool` | Bind spool → printer AMS slot. |
+| `consume_spool` | Log grams used. |
+| `complete_maintenance` | Log task completion. |
+
+### Reference (no backend)
+
+| Tool | Purpose |
+|------|---------|
+| `calculate_print_cost` | Material + electricity + depreciation + failure-rate math. |
+| `recommend_printer_for_farm` | Match printers to farm constraints. |
+| `estimate_farm_capacity` | Throughput forecasting. |
+| `compare_farm_software` | Feature matrix vs OctoFarm / Mainsail / Duet / etc. |
+
+---
+
+## Agent Primitives
+
+The live surface inherits four retry-safety primitives from the O.D.I.N. v1.8.9 backend:
+
+**Idempotency-Key.** Every write tool auto-generates a UUID key per call; pass a stable `idempotency_key` across retries to deduplicate. On replay, the response comes back with `_idempotent_replay: true`.
+
+**X-Dry-Run.** Pass `dry_run: true` to any write tool. The backend returns `{dry_run: true, would_execute: {...}}` without committing. Per-route opt-in — individual routes land preview branches in subsequent releases.
+
+**Structured errors.** Failures return an `error: {code, detail, retriable}` envelope. Stable codes agents can branch on:
+
+| Code | Meaning |
+|------|---------|
+| `printer_not_found` / `job_not_found` / `spool_not_found` / `alert_not_found` | Resource missing. |
+| `scope_denied` | Token scope insufficient. Mint a broader token. |
+| `permission_denied` | Role-based denial (role, not scope). |
+| `quota_exceeded` | Usage quota hit. `extra.used_grams` / `extra.limit_grams`. |
+| `idempotency_conflict` | Same key + different body. Use a fresh key. |
+| `idempotency_in_progress` | Concurrent retry in flight. Retry shortly. |
+| `idempotency_authz_changed` | Role/scope changed since the original call. Mint a fresh key. |
+| `idempotency_uncacheable_success` | Original succeeded but couldn't be cached. Mint a fresh key. |
+| `idempotency_unsupported` | Multipart or oversized body — use app-level dedup. |
+| `itar_outbound_blocked` | ODIN_ITAR_MODE=1 refused a public destination. |
+| `rate_limited` | `retriable: true`. |
+| `validation_failed` | Input schema error. |
+
+**next_actions hints.** Write responses include `next_actions: [{tool, args?, reason?}]` suggesting follow-up calls. Pure hint — no enforcement. Designed for 7B–32B local models.
+
+---
+
+## ITAR / CMMC Deployment
+
+O.D.I.N. ships `ODIN_ITAR_MODE=1` for fail-closed air-gap deployments. Typical stack:
+
+```
+   Ollama (Qwen2.5-32B or similar)
+      │
+      ▼
+   MCP client (Claude Desktop / OpenClaw / etc.)
+      │ stdio
+      ▼
+   odin-print-farm-mcp@2  ── ODIN_BASE_URL=http://localhost:8000
+      │ HTTP
+      ▼
+   O.D.I.N. backend  ── ODIN_ITAR_MODE=1
+      │ LAN
+      ▼
+   Printers (LAN-only)
+```
+
+Zero outbound packets. All tokens, prompts, and telemetry stay inside the compliance boundary. See the [ITAR / CMMC mode docs](https://runsodin.com/docs/configuration/itar-mode).
+
+---
+
+## Migration from v1
+
+v1 tools (`calculate_print_cost`, `recommend_printer_for_farm`, `estimate_farm_capacity`, `compare_farm_software`) continue to work unchanged. The v2 live tools are additive.
+
+If you pin `odin-print-farm-mcp@1` in your MCP client config, nothing breaks. Upgrade to `@2` to access the 22 live tools.
+
+---
+
+## Development
+
+```bash
+git clone https://github.com/HughKantsime/odin-mcp
 cd odin-mcp
 npm install
 npm run build
-npm start
+npm test  # 22 integration tests against an in-process mock ODIN
 ```
 
-## Available Tools
+Tests use a node-native http mock server (`test/mock_server.ts`) — no external fixtures, no ODIN instance required, runs in ~1s.
 
-### `calculate_print_cost`
-
-Calculate the true cost of a 3D printed part including material, electricity, machine depreciation, labor, and failure rate.
-
-**Parameters:**
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `printer_model` | string | No | Generic | Printer model name (matched against database) |
-| `filament_type` | string | Yes | — | PLA, PETG, ABS, ASA, TPU, or Nylon |
-| `filament_cost_per_kg` | number | Yes | — | Filament cost in $/kg |
-| `print_weight_grams` | number | Yes | — | Print weight in grams |
-| `print_time_hours` | number | Yes | — | Print time in hours |
-| `electricity_rate_kwh` | number | No | 0.12 | Electricity rate in $/kWh |
-| `labor_rate_per_hour` | number | No | 0 | Labor rate in $/hour |
-| `failure_rate_pct` | number | No | 5 | Expected failure rate (%) |
-
-**Example prompt:** "What does it cost to print a 45g PLA part on a Bambu Lab P1S that takes 3 hours?"
-
-### `compare_farm_software`
-
-Compare print farm management platforms (ODIN, SimplyPrint, 3DPrinterOS, OctoPrint, Obico) based on your specific needs.
-
-**Parameters:**
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `printer_count` | number | Yes | — | Number of printers in your farm |
-| `protocols_needed` | string[] | No | — | Required protocols (bambu-mqtt, moonraker, prusalink, elegoo-sdcp) |
-| `self_hosted_required` | boolean | No | false | Whether self-hosted is required |
-| `budget_monthly` | number | No | — | Monthly budget in USD |
-
-**Example prompt:** "Compare farm management software for 12 Bambu Lab printers that needs to be self-hosted."
-
-### `recommend_printer_for_farm`
-
-Get printer recommendations for a farm based on use case, budget, and existing fleet.
-
-**Parameters:**
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `use_case` | string | Yes | — | Primary use (production, prototyping, education, dental, miniatures, cosplay) |
-| `budget_per_printer` | number | No | — | Max budget per printer in USD |
-| `existing_fleet` | string[] | No | — | Printers already owned |
-| `priority` | string | No | reliability | Top priority: speed, quality, reliability, or cost |
-
-**Example prompt:** "Recommend a printer for a production farm with a $700 budget. I already have 5 Bambu P1S printers."
-
-### `estimate_farm_capacity`
-
-Estimate monthly production capacity and identify bottlenecks in your print farm.
-
-**Parameters:**
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `printers` | array | Yes | — | Fleet: [{model, count, hours_per_day}] |
-| `avg_print_time_hours` | number | Yes | — | Average print time in hours |
-| `changeover_minutes` | number | No | 15 | Minutes between prints |
-
-**Example prompt:** "I have 4 Bambu X1C running 16 hours/day and 2 Prusa MK4S running 12 hours/day. Average print is 2.5 hours. What's my monthly capacity?"
-
-## Data Coverage
-
-- **39 printers** — Bambu Lab, Prusa, Voron, Creality, Elegoo, QIDI, RatRig, and more
-- **10 filament types** — PLA, PETG, ABS, ASA, TPU, Nylon, PC, PLA+, CF-PETG, Resin
-- **6 farm platforms** — O.D.I.N., SimplyPrint, 3DPrinterOS, OctoPrint, Obico, Manual
+---
 
 ## Links
 
-- **ODIN** — [runsodin.com](https://runsodin.com)
-- **Print Cost Calculator** — [runsodin.com/tools/print-cost-calculator](https://runsodin.com/tools/print-cost-calculator)
-- **Farm Comparison** — [runsodin.com/compare](https://runsodin.com/compare)
-- **Capacity Planner** — [runsodin.com/tools/capacity-planner](https://runsodin.com/tools/capacity-planner)
+- [O.D.I.N.](https://runsodin.com) — the backend this talks to
+- [MCP docs on runsodin.com](https://runsodin.com/docs/integrations/mcp-server)
+- [Model Context Protocol spec](https://modelcontextprotocol.io)
+- [npm package](https://www.npmjs.com/package/odin-print-farm-mcp)
 
 ## License
 
-Apache-2.0
+Apache 2.0.
