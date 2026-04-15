@@ -815,6 +815,20 @@ server.registerTool("estimate_farm_capacity", {
   return { content: [{ type: "text" as const, text: lines.join("\n") }] };
 });
 
+// -------------------------------------------------------------------
+// v2 agent-surface tools (Phase 2). Registered unconditionally —
+// they only fail at invocation time if ODIN_BASE_URL / ODIN_API_KEY
+// are unset, so the v1 reference-calculator tools continue working
+// for pre-sales / standalone use cases without any backend.
+// -------------------------------------------------------------------
+import { registerReadTools } from "./tools/read_tools.js";
+import { registerWriteTools } from "./tools/write_tools.js";
+import { registerReferenceTools } from "./tools/reference_tools.js";
+
+registerReadTools(server);
+registerWriteTools(server);
+registerReferenceTools(server);
+
 // Start the server
 async function main() {
   const transport = new StdioServerTransport();
