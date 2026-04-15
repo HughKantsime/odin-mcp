@@ -33,6 +33,72 @@ export interface OdinClientConfig {
   defaultTimeoutMs: number;
 }
 
+// ---------------------------------------------------------------------
+// Backend version sniff (v2.1.0 safety gate).
+//
+// Pre-1.9.0 backends silently execute mutating requests even when
+// X-Dry-Run: true is sent — the middleware parses the header but no
+// route checks the flag. A client calling `dry_run: true` against a
+// stale server therefore performs the REAL mutation. That's the
+// "agent cancelled a real print thinking it was a preview" failure
+// mode Phase 2 closed on 1.9.0.
+//
+// The MCP client now calls GET /api/v1/version once per process and
+// refuses to forward dry-run to backends < 1.9.0.
+// ---------------------------------------------------------------------
+
+const MIN_DRY_RUN_BACKEND = { major: 1, minor: 9, patch: 0 };
+
+const _versionCache = new Map<string, string>();
+let _warnedStaleBackend = false;
+
+function _parseSemver(s: string): { major: number; minor: number; patch: number } | null {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(s.trim());
+  if (!m) return null;
+  return { major: +m[1], minor: +m[2], patch: +m[3] };
+}
+
+function _supportsDryRun(version: string): boolean {
+  const v = _parseSemver(version);
+  if (!v) return false;
+  if (v.major > MIN_DRY_RUN_BACKEND.major) return true;
+  if (v.major < MIN_DRY_RUN_BACKEND.major) return false;
+  if (v.minor > MIN_DRY_RUN_BACKEND.minor) return true;
+  if (v.minor < MIN_DRY_RUN_BACKEND.minor) return false;
+  return v.patch >= MIN_DRY_RUN_BACKEND.patch;
+}
+
+async function _fetchBackendVersion(cfg: OdinClientConfig, timeoutMs: number): Promise<string> {
+  const cached = _versionCache.get(cfg.baseUrl);
+  if (cached !== undefined) return cached;
+
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(`${cfg.baseUrl}/api/v1/version`, {
+      method: "GET",
+      headers: { "X-API-Key": cfg.apiKey, Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      // Treat non-200 as "unknown" — pre-1.9.0 backends won't have this
+      // endpoint at all and will 404. That's exactly the stale-backend
+      // case; cache it as "0.0.0" so _supportsDryRun returns false.
+      _versionCache.set(cfg.baseUrl, "0.0.0");
+      return "0.0.0";
+    }
+    const body = (await resp.json()) as { version?: string };
+    const v = body?.version ?? "0.0.0";
+    _versionCache.set(cfg.baseUrl, v);
+    return v;
+  } catch {
+    _versionCache.set(cfg.baseUrl, "0.0.0");
+    return "0.0.0";
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 export interface OdinErrorEnvelope {
   code: string;
   detail: string;
@@ -165,6 +231,29 @@ export async function odinRequest<T = unknown>(
     headers["Idempotency-Key"] = opts.idempotencyKey ?? randomUUID();
   }
   if (opts.dryRun) {
+    if (isMutating) {
+      // v2.1.0: refuse to forward dry-run to a backend that can't honor
+      // it. Pre-1.9.0 would silently execute the real mutation.
+      const backendVersion = await _fetchBackendVersion(cfg, 2000);
+      if (!_supportsDryRun(backendVersion)) {
+        if (!_warnedStaleBackend) {
+          _warnedStaleBackend = true;
+          console.warn(
+            `[odin-mcp] backend ${cfg.baseUrl} reports version ${backendVersion}; ` +
+              `dry_run requires >= ${MIN_DRY_RUN_BACKEND.major}.${MIN_DRY_RUN_BACKEND.minor}.${MIN_DRY_RUN_BACKEND.patch}. ` +
+              `Refusing dry_run until backend is upgraded.`,
+          );
+        }
+        throw new OdinApiError(501, {
+          code: "dry_run_unsupported_backend",
+          detail:
+            `ODIN backend at ${cfg.baseUrl} reports version ${backendVersion}; ` +
+            `dry_run_unsupported until >= ${MIN_DRY_RUN_BACKEND.major}.${MIN_DRY_RUN_BACKEND.minor}.${MIN_DRY_RUN_BACKEND.patch}. ` +
+            `Retry without dry_run, or upgrade ODIN.`,
+          retriable: false,
+        });
+      }
+    }
     headers["X-Dry-Run"] = "true";
   }
 

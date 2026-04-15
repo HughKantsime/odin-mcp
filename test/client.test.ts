@@ -92,13 +92,74 @@ describe("client — write path", () => {
       json: { dry_run: true, would_execute: { action: "queue_job" } },
     }));
     await odinPost(cfg, "/api/v1/jobs", { body: { item: "x" }, dryRun: true });
-    assert.equal(mock.requests[0].headers["x-dry-run"], "true");
+    // v2.1.0: client also fires GET /api/v1/version on first dry_run call
+    // (backend version-sniff safety gate). Find the actual POST /jobs
+    // request among the recorded traffic.
+    const postReq = mock.requests.find((r) => r.method === "POST" && r.path === "/api/v1/jobs");
+    assert.ok(postReq, "Expected POST /api/v1/jobs to be recorded");
+    assert.equal(postReq.headers["x-dry-run"], "true");
   });
 
   test("dry_run omitted → no X-Dry-Run header", async () => {
     mock.setRoute("POST", "/api/v1/jobs", () => ({ status: 201, json: { id: 7 } }));
     await odinPost(cfg, "/api/v1/jobs", { body: { item: "x" } });
     assert.equal(mock.requests[0].headers["x-dry-run"], undefined);
+  });
+
+  test("dry_run against pre-1.9.0 backend throws dry_run_unsupported_backend", async () => {
+    // Override the default 1.9.0 version handler with a stale version.
+    mock.setRoute("GET", "/api/v1/version", () => ({
+      status: 200,
+      json: { version: "1.8.9" },
+    }));
+    mock.setRoute("POST", "/api/v1/jobs", () => ({
+      status: 200,
+      json: { dry_run: true, would_execute: {} },
+    }));
+    // New client instance so the version cache is cold for this test's
+    // baseUrl — otherwise a prior test may have cached 1.9.0.
+    const staleCfg = { ...cfg, baseUrl: mock.url + "?stale=" + Date.now() };
+    await assert.rejects(
+      async () => {
+        await odinPost(staleCfg, "/api/v1/jobs", {
+          body: { item: "x" },
+          dryRun: true,
+        });
+      },
+      (err: Error & { code?: string; retriable?: boolean }) => {
+        return (
+          err.name === "OdinApiError" &&
+          err.code === "dry_run_unsupported_backend" &&
+          err.retriable === false
+        );
+      },
+    );
+    // Critical: the real POST /jobs must NOT have been sent — the
+    // refusal happens client-side before the mutation.
+    const postReq = mock.requests.find(
+      (r) => r.method === "POST" && r.path === "/api/v1/jobs",
+    );
+    assert.equal(postReq, undefined, "POST must not be sent when backend is stale");
+  });
+
+  test("dry_run against missing /version endpoint also refuses (treats as 0.0.0)", async () => {
+    // Simulate an even older backend that doesn't have the version
+    // endpoint at all.
+    mock.setRoute("GET", "/api/v1/version", () => ({
+      status: 404,
+      json: { detail: "Not Found" },
+    }));
+    mock.setRoute("POST", "/api/v1/jobs", () => ({ status: 200, json: {} }));
+    const staleCfg = { ...cfg, baseUrl: mock.url + "?very-stale=" + Date.now() };
+    await assert.rejects(
+      async () => {
+        await odinPost(staleCfg, "/api/v1/jobs", {
+          body: { item: "x" },
+          dryRun: true,
+        });
+      },
+      (err: Error & { code?: string }) => err.name === "OdinApiError" && err.code === "dry_run_unsupported_backend",
+    );
   });
 
   test("POST with body sends Content-Length", async () => {

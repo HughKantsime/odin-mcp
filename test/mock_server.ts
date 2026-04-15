@@ -62,6 +62,15 @@ export async function startMockServer(): Promise<MockServer> {
 
   const keyFor = (method: string, path: string) => `${method.toUpperCase()} ${path}`;
 
+  // Default handler for the version-sniff endpoint. Returns 1.9.0 so
+  // the client's dry_run safety gate (v2.1.0) is satisfied by default.
+  // Individual tests can override via setRoute to simulate pre-1.9.0
+  // backends.
+  routes.set(keyFor("GET", "/api/v1/version"), () => ({
+    status: 200,
+    json: { version: "1.9.0" },
+  }));
+
   const server: Server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const rawBody = await readRequestBody(req);
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -152,6 +161,13 @@ export async function startMockServer(): Promise<MockServer> {
     reset: () => {
       routes.clear();
       requests.length = 0;
+      // Re-install the default version-sniff handler after reset so the
+      // client's dry_run safety gate keeps working. Individual tests
+      // can still override after calling reset().
+      routes.set(keyFor("GET", "/api/v1/version"), () => ({
+        status: 200,
+        json: { version: "1.9.0" },
+      }));
     },
     close: () =>
       new Promise<void>((resolve, reject) => {
