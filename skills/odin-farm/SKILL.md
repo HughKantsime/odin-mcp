@@ -47,32 +47,32 @@ Start with `farm_summary`. It gives printer state counts, queue depth, unread al
 
 - `list_queue` — see what's pending.
 - `list_jobs {status: "printing"}` — see what's running.
-- `queue_job` — add. Requires `print_file_id`, `printer_id` (or `auto_assign: true`), optional `priority`.
+- `queue_job` — add. Requires `model_id`; optional `item_name`, `quantity`, `priority`, and `notes`. The ODIN scheduler assigns the printer.
 - `approve_job` / `reject_job` — for jobs awaiting operator approval.
 - `cancel_job` — requires a `reason` on most routes.
 
 ### Printer control
 
-- `get_printer {printer_id}` — full telemetry + AMS + active job.
+- `get_printer {id}` — full telemetry + AMS + active job.
 - `pause_printer` / `resume_printer` — affects the currently-running job on that printer.
 
 ### Inventory
 
-- `list_spools {available: true}` — only unassigned spools.
+- `list_spools {available_only: true}` — only unassigned spools.
 - `list_spools {filament_type: "PLA"}` — filter by material.
 - `assign_spool {spool_id, printer_id, ams_slot}` — bind spool to AMS slot.
 - `consume_spool {spool_id, grams}` — manually log consumption.
 
 ### Alerts
 
-- `list_alerts {severity: "critical", is_read: false}` — triage.
+- `list_alerts {severity: "critical", unread_only: true}` — triage.
 - `mark_alert_read` — after the user acknowledges.
 - `dismiss_alert` — when the user explicitly dismisses.
 
 ### Maintenance
 
 - `list_maintenance_tasks {overdue_only: true}` — what's overdue.
-- `complete_maintenance` — log that a task was done.
+- `complete_maintenance {printer_id, task_id, task_name}` — log that a task was done.
 
 ### Reference calculators (no backend)
 
@@ -95,18 +95,18 @@ Use these for planning, pre-sales, research — they never touch the farm.
 
 ## Example interaction
 
-User: *"Cancel the failed Benchy print and queue it again on Printer 3."*
+User: *"Cancel the failed Benchy print and queue it again."*
 
 Good response flow:
 
 1. `list_jobs {status: "failed"}` → find the Benchy job.
-2. `get_job {job_id}` → confirm it's the right one, note the `print_file_id`.
+2. `get_job {job_id}` → confirm it's the right one, note the `model_id`.
 3. `cancel_job {job_id, reason: "reprinting", dry_run: true}` → show preview.
 4. User confirms.
 5. `cancel_job {job_id, reason: "reprinting"}` → execute.
-6. `queue_job {print_file_id, printer_id: 3, dry_run: true}` → show preview.
+6. `queue_job {model_id, item_name: "Benchy reprint", dry_run: true}` → show preview.
 7. User confirms.
-8. `queue_job {print_file_id, printer_id: 3}` → execute.
+8. `queue_job {model_id, item_name: "Benchy reprint"}` → execute.
 9. Report final state with the new `job_id`.
 
-Bad response flow: calling both writes back-to-back without confirmation, or assuming `printer_id: 3` without verifying the printer exists and is idle.
+Bad response flow: calling both writes back-to-back without confirmation, or claiming a job is pinned to a specific printer when the queue endpoint lets ODIN schedule it.

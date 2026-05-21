@@ -1,5 +1,34 @@
 # Changelog
 
+## [2.1.1] - 2026-05-21
+
+### Fixed — live tool backend contracts
+
+- `queue_job` no longer accepts or forwards unsupported `printer_id`;
+  the backend scheduler assigns printers from supported job fields.
+- `complete_maintenance` now sends the backend-required
+  `printer_id`, `task_id`, and `task_name` fields.
+- Updated `odin-farm` skill docs to use current live-tool argument
+  names (`id`, `available_only`, `unread_only`, `model_id`,
+  `task_name`).
+- Added write-tool payload contract tests against the in-process mock
+  ODIN server, and updated `npm test` to run every `test/*.test.ts`.
+
+### Fixed — release hygiene
+
+- Synchronized `package-lock.json` root version with `package.json`.
+- Updated transitive `hono` lockfile entry to a non-vulnerable version.
+
+## [2.1.0] - 2026-04-15
+
+### Added — backend dry-run safety gate
+
+Live write tools now sniff `GET /api/v1/version` before forwarding
+`dry_run: true`. Backends older than O.D.I.N. `1.9.0` do not reliably
+honor dry-run previews on mutating routes, so the MCP client refuses
+the call with `dry_run_unsupported_backend` instead of risking a real
+hardware mutation.
+
 ## [2.0.4] - 2026-04-15
 
 ### Fixed — backward-compat for the 2.0.1 reference-tool rename

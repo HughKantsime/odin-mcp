@@ -92,28 +92,27 @@ export function registerWriteTools(server: McpServer): void {
     "queue_job",
     {
       description:
-        "Add a print job to the queue. Optionally pin to a specific printer; " +
-        "otherwise the scheduler assigns based on capability match.",
+        "Add a print job to the queue. The ODIN scheduler assigns a printer " +
+        "after capability and availability checks; this tool does not pin to a specific printer.",
       inputSchema: {
         model_id: z.number().int().positive().describe("Model from the library"),
-        printer_id: z.number().int().positive().optional().describe("Optional target printer"),
+        item_name: z.string().min(1).max(200).optional().describe("Display name for the queued job"),
         quantity: z.number().int().min(1).max(100).default(1),
-        priority: z.number().int().min(1).max(10).default(3),
+        priority: z.number().int().min(0).max(10).default(3),
         notes: z.string().max(500).optional(),
         ...writeControls,
       },
     },
-    async ({ model_id, printer_id, quantity, priority, notes, dry_run, idempotency_key }) => {
+    async ({ model_id, item_name, quantity, priority, notes, dry_run, idempotency_key }) => {
       try {
         const cfg = _client();
         const { body, idempotentReplay } = await odinPost(cfg, "/api/v1/jobs", {
           body: {
             model_id,
-            printer_id,
             quantity,
             priority,
             notes,
-            item_name: notes?.slice(0, 80) ?? `model ${model_id}`,
+            item_name: item_name ?? notes?.slice(0, 80) ?? `model ${model_id}`,
           },
           dryRun: dry_run,
           idempotencyKey: idempotency_key,
@@ -358,16 +357,18 @@ export function registerWriteTools(server: McpServer): void {
     {
       description: "Log completion of a maintenance task (ODIN's maintenance-logs model).",
       inputSchema: {
+        printer_id: z.number().int().positive(),
         task_id: z.number().int().positive(),
+        task_name: z.string().min(1).max(200),
         notes: z.string().max(500).optional(),
         ...writeControls,
       },
     },
-    async ({ task_id, notes, dry_run, idempotency_key }) => {
+    async ({ printer_id, task_id, task_name, notes, dry_run, idempotency_key }) => {
       try {
         const cfg = _client();
         const { body, idempotentReplay } = await odinPost(cfg, `/api/v1/maintenance/logs`, {
-          body: { task_id, notes },
+          body: { printer_id, task_id, task_name, notes },
           dryRun: dry_run,
           idempotencyKey: idempotency_key,
         });

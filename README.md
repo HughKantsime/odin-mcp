@@ -82,7 +82,7 @@ Every write tool accepts optional `dry_run` and `idempotency_key`.
 
 | Tool | Purpose |
 |------|---------|
-| `queue_job` | Add a job. |
+| `queue_job` | Add a job from a model library ID. Accepts `model_id`, optional `item_name`, `quantity`, `priority`, and `notes`; the ODIN scheduler assigns the printer. |
 | `cancel_job` | Cancel a job. Requires reason on some endpoints. |
 | `approve_job` | Approve a submitted job. |
 | `reject_job` | Reject a job (reason required). |
@@ -91,7 +91,7 @@ Every write tool accepts optional `dry_run` and `idempotency_key`.
 | `mark_alert_read` / `dismiss_alert` | Alert housekeeping. |
 | `assign_spool` | Bind spool → printer AMS slot. |
 | `consume_spool` | Log grams used. |
-| `complete_maintenance` | Log task completion. |
+| `complete_maintenance` | Log task completion. Requires `printer_id`, `task_id`, and `task_name`. |
 
 ### Reference (no backend)
 
