@@ -70,7 +70,7 @@ const reads: [string, string, Record<string, unknown>, unknown, unknown][] = [
   ["list_jobs", "/api/v1/jobs", { status_filter: "scheduled" }, [{ id: 2, status: "scheduled" }], { jobs: [{ id: 2, status: "scheduled" }] }],
   ["get_job", "/api/v1/jobs/2", { id: 2 }, { id: 2, pinned_printer_id: 4 }, { id: 2, pinned_printer_id: 4 }],
   ["list_alerts", "/api/v1/alerts", { severity: "critical", unread_only: true, limit: 40, offset: 10 }, [{ id: 2 }], { alerts: [{ id: 2 }] }],
-  ["list_spools", "/api/v1/spools", { filament_type: "pla", available_only: true }, [{ id: 1, filament_material: "PLA", location_printer_id: null }, { id: 2, filament_material: "PLA", location_printer_id: 2 }, { id: 3, filament_material: "PETG", location_printer_id: null }], { spools: [{ id: 1, filament_material: "PLA", location_printer_id: null }] }],
+  ["list_spools", "/api/v1/spools", { filament_type: "pla", available_only: true }, [{ id: 1, filament_material: "PLA", location_printer_id: null, status: "active" }, { id: 2, filament_material: "PLA", location_printer_id: 2, status: "active" }, { id: 3, filament_material: "PETG", location_printer_id: null, status: "active" }, { id: 4, filament_material: "PLA", location_printer_id: null, status: "empty" }], { spools: [{ id: 1, filament_material: "PLA", location_printer_id: null, status: "active" }] }],
   ["list_filaments", "/api/v1/filament-library", {}, [{ id: 1, material: "PLA" }], { filaments: [{ id: 1, material: "PLA" }] }],
   ["list_maintenance_tasks", "/api/v1/maintenance/tasks", {}, [{ id: 1, name: "Clean" }], { tasks: [{ id: 1, name: "Clean" }] }],
   ["list_orders", "/api/v1/orders", { status_filter: "fulfilled" }, [{ id: 2, status: "fulfilled" }], { orders: [{ id: 2, status: "fulfilled" }] }],
@@ -139,11 +139,11 @@ test("schemas match backend enums, one-based slots and bodyless lifecycle writes
 
 test("printer states use actual gcode_state and heartbeat response fields across protocols", async () => {
   const now = Date.now();
-  const states = ["IDLE", "FINISH", "RUNNING", "PRINTING", "PREPARE", "PAUSE", "PAUSED", "FAILED", "ERROR", "OFFLINE", "OTHER"];
+  const states = ["IDLE", "FINISH", "RUNNING", "PRINTING", "PREPARE", "PAUSE", "PAUSED", "FAILED", "ERROR", "OFFLINE", "OTHER", "UNKNOWN"];
   const printers = states.map((gcode_state, id) => ({ id, gcode_state, last_seen: new Date(now - 1000).toISOString() }));
   printers.push({ id: 12, gcode_state: "RUNNING", last_seen: new Date(now - 100000).toISOString() });
   mock.setRoute("GET", "/api/v1/printers", () => ({ status: 200, json: printers }));
-  for (const [status_filter, ids] of Object.entries({ idle: [0, 1], printing: [2, 3, 4], paused: [5, 6], error: [7, 8], offline: [9, 12] })) {
+  for (const [status_filter, ids] of Object.entries({ idle: [0, 1, 10], printing: [2, 3, 4], paused: [5, 6], error: [7, 8, 11], offline: [9, 12] })) {
     assert.deepEqual(data(await call("list_printers", { status_filter })).printers.map((p: any) => p.id), ids);
   }
 });

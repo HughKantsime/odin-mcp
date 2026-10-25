@@ -71,9 +71,9 @@ function printerState(printer: Row): string {
   if (state === "OFFLINE" || !Number.isFinite(lastSeen) || age < 0 || age >= 90_000) return "offline";
   if (["RUNNING", "PRINTING", "PREPARE"].includes(state)) return "printing";
   if (["PAUSE", "PAUSED"].includes(state)) return "paused";
-  if (["FAILED", "ERROR"].includes(state)) return "error";
-  if (["IDLE", "FINISH", "READY"].includes(state)) return "idle";
-  return "unknown";
+  if (["FAILED", "ERROR", "UNKNOWN"].includes(state)) return "error";
+  // ODIN's metrics count every other online state (including empty) as idle.
+  return "idle";
 }
 
 // ODIN jobs and alerts return bare arrays with limit/offset pagination.
@@ -248,7 +248,7 @@ export function registerReadTools(server: McpServer): void {
         available_only: z
           .boolean()
           .default(false)
-          .describe("True → only spools not currently loaded in a printer."),
+          .describe("True → only active spools not currently loaded in a printer."),
       },
     },
     async ({ filament_type, available_only }) => {
@@ -257,7 +257,7 @@ export function registerReadTools(server: McpServer): void {
         const { body, idempotentReplay } = await odinGet<Row[]>(cfg, "/api/v1/spools");
         const spools = body.filter(spool =>
           (!filament_type || String(spool.filament_material ?? "").toLowerCase() === filament_type.toLowerCase()) &&
-          (!available_only || spool.location_printer_id == null));
+          (!available_only || (spool.location_printer_id == null && spool.status === "active")));
         return okResult({ spools }, idempotentReplay);
       } catch (err) {
         return errorToResult(err);
