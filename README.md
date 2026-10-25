@@ -7,7 +7,7 @@ Model Context Protocol server for O.D.I.N. — drive an actual print farm with A
 - **Live tools** (22) — agent-driven farm operation. Require a running O.D.I.N. instance + a scoped token. Queue jobs, pause printers, manage inventory, clear alerts, log maintenance, read the dashboard.
 - **Reference tools** (4) — standalone calculators. No ODIN deployment required. Print-cost math, printer recommendations, farm capacity planning, software comparison.
 
-Both surfaces ship in the same npm package; the live tools error at invocation if `ODIN_BASE_URL` / `ODIN_API_KEY` aren't set, so the reference tools keep working for pre-sales and research use cases.
+Both surfaces ship in the same npm package; the live tools error at invocation if `ODIN_BASE_URL` and credentials aren't set, so the reference tools keep working for pre-sales and research use cases.
 
 ---
 
@@ -66,14 +66,14 @@ All 26 tools are now available.
 |------|---------|
 | `farm_summary` | One-shot dashboard: printer counts by state, queue depth, unread alerts, active jobs. Call this first to orient. |
 | `list_printers` | Fleet list, optional status filter. |
-| `get_printer` | Full status + telemetry + AMS + active job for one printer. |
+| `get_printer` | Printer record with persisted telemetry, filament slots and temperatures. |
 | `list_jobs` | Filter by status (pending / printing / completed / failed / cancelled). |
 | `get_job` | Full job record. |
-| `list_queue` | Pending jobs in priority order. |
-| `list_alerts` | Filter by severity + read state. |
+| `list_queue` | All pending and scheduled jobs in priority, queue-position and age order. |
+| `list_alerts` | Filter by severity + read state; `limit` (default 100, max 500) and `offset` page results. |
 | `list_spools` | Filter by filament type / availability. |
 | `list_filaments` | Filament library. |
-| `list_maintenance_tasks` | Optional overdue-only filter. |
+| `list_maintenance_tasks` | Templates, or overdue per-printer task health with `overdue_only`. |
 | `list_orders` | Customer orders by status. |
 
 ### Live writes (scope `agent:write` or admin)
@@ -83,15 +83,15 @@ Every write tool accepts optional `dry_run` and `idempotency_key`.
 | Tool | Purpose |
 |------|---------|
 | `queue_job` | Add a job from a model library ID. Accepts `model_id`, optional `item_name`, `quantity`, `priority`, and `notes`; the ODIN scheduler assigns the printer. |
-| `cancel_job` | Cancel a job. Requires reason on some endpoints. |
+| `cancel_job` | Cancel a pending or scheduled job; this route does not accept a reason or stop a printing job. |
 | `approve_job` | Approve a submitted job. |
 | `reject_job` | Reject a job (reason required). |
 | `pause_printer` | Pause the active print. |
 | `resume_printer` | Resume a paused printer. |
 | `mark_alert_read` / `dismiss_alert` | Alert housekeeping. |
-| `assign_spool` | Bind spool → printer AMS slot. |
+| `assign_spool` | Bind spool → printer slot (`ams_slot` is the one-based slot number from `get_printer`, default 1). |
 | `consume_spool` | Log grams used. |
-| `complete_maintenance` | Log task completion. Requires `printer_id`, `task_id`, and `task_name`. |
+| `complete_maintenance` | Log task completion. Requires `printer_id` and `task_name`; `task_id` is optional. |
 
 ### Reference (no backend)
 
@@ -204,3 +204,27 @@ Tests use a node-native http mock server (`test/mock_server.ts`) — no external
 ## License
 
 Apache 2.0.
+
+### ODIN 2.0.13 authentication and permissions
+
+Set `ODIN_BEARER_TOKEN` to an access JWT for Bearer authentication instead of
+`ODIN_API_KEY`. When both are explicitly configured, both headers are sent;
+ODIN rejects an invalid explicit API key at its perimeter even with a valid JWT.
+The dry-run version probe uses the same credentials. No login, token renewal or
+credential fallback is performed by this server.
+
+Scoped user tokens require `agent:read` for reads or `agent:write` for writes
+(and reads); `admin` scope is also accepted. The owning user's role and the
+current Settings → Permissions action matrix still apply. JWT sessions bypass
+token-scope checks but retain role/action checks. Legacy global API keys resolve
+to ODIN's backend admin; they are not scoped user tokens. License and Education
+workflow restrictions remain server-enforced; scopes do not override them.
+
+Printer state and spool material/availability filters run locally because ODIN
+does not accept those query parameters. Orders use `status_filter`; job states
+include `scheduled` and `rejected`, and order states include `partial` and
+`fulfilled`. Queue and summary calls page through all job/alert results. These
+multiple reads are not an atomic snapshot of a changing farm.
+
+See [the compatibility audit](docs/odin-2.0.13-audit.html) for every tool's route,
+permissions, fixes and follow-up capabilities.

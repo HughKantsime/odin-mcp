@@ -1,7 +1,7 @@
 /**
  * ODIN HTTP client for the v2 MCP tool surface.
  *
- * Reads ODIN_BASE_URL + ODIN_API_KEY from env. Each tool invocation
+ * Reads ODIN_BASE_URL and ODIN_API_KEY / ODIN_BEARER_TOKEN from env. Each tool invocation
  * that needs a live ODIN call goes through `odinRequest()` which
  * wraps fetch with:
  *   - bounded timeout (5s default, per-tool override via AbortSignal)
@@ -29,7 +29,8 @@ import { randomUUID } from "node:crypto";
 
 export interface OdinClientConfig {
   baseUrl: string;
-  apiKey: string;
+  apiKey?: string;
+  bearerToken?: string;
   defaultTimeoutMs: number;
 }
 
@@ -77,7 +78,7 @@ async function _fetchBackendVersion(cfg: OdinClientConfig, timeoutMs: number): P
   try {
     const resp = await fetch(`${cfg.baseUrl}/api/v1/version`, {
       method: "GET",
-      headers: { "X-API-Key": cfg.apiKey, Accept: "application/json" },
+      headers: authHeaders(cfg),
       signal: controller.signal,
     });
     if (!resp.ok) {
@@ -101,7 +102,7 @@ async function _fetchBackendVersion(cfg: OdinClientConfig, timeoutMs: number): P
 
 export interface OdinErrorEnvelope {
   code: string;
-  detail: string;
+  detail: unknown;
   retriable: boolean;
   [key: string]: unknown;
 }
@@ -109,12 +110,12 @@ export interface OdinErrorEnvelope {
 export class OdinApiError extends Error {
   readonly status: number;
   readonly code: string;
-  readonly detail: string;
+  readonly detail: unknown;
   readonly retriable: boolean;
   readonly extra: Record<string, unknown>;
 
   constructor(status: number, envelope: OdinErrorEnvelope) {
-    super(`[${envelope.code}] ${envelope.detail}`);
+    super(`[${envelope.code}] ${typeof envelope.detail === "string" ? envelope.detail : JSON.stringify(envelope.detail)}`);
     this.name = "OdinApiError";
     this.status = status;
     this.code = envelope.code;
@@ -144,7 +145,7 @@ export interface OdinResponse<T = unknown> {
 /**
  * Read client config from env. Throws a clear error if unset so the
  * tool layer can surface a "configure ODIN_BASE_URL + ODIN_API_KEY"
- * hint rather than a generic fetch failure.
+ * hint rather than a generic fetch failure. Bearer-only access JWTs are also supported.
  *
  * Reference.* tools don't need a live ODIN — they bypass this
  * constructor entirely.
@@ -160,19 +161,27 @@ export function loadClientFromEnv(): OdinClientConfig {
         "without this and don't require a live backend.",
     );
   }
-  if (!apiKey) {
+  const bearerToken = process.env.ODIN_BEARER_TOKEN || undefined;
+  if (!apiKey && !bearerToken) {
     throw new Error(
-      "ODIN_API_KEY is not set. Create a per-user token in ODIN " +
-        "(Settings → API Tokens) with scope 'agent:read' or 'agent:write' " +
-        "and export it as ODIN_API_KEY. The global API_KEY env on the " +
-        "backend is NOT used for scope checks — mint a scoped token.",
+      "Set ODIN_API_KEY (scoped user token or legacy global key) or ODIN_BEARER_TOKEN " +
+        "(access JWT). Scoped tokens need agent:read or agent:write; writes also require " +
+        "the owning user's configured RBAC action permission. Global keys resolve to the backend admin.",
     );
   }
   return {
     baseUrl,
     apiKey,
+    bearerToken,
     defaultTimeoutMs: 5_000,
   };
+}
+
+function authHeaders(cfg: OdinClientConfig): Record<string, string> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (cfg.apiKey) headers["X-API-Key"] = cfg.apiKey;
+  if (cfg.bearerToken) headers.Authorization = `Bearer ${cfg.bearerToken}`;
+  return headers;
 }
 
 function buildQueryString(query?: Record<string, string | number | boolean | undefined>): string {
@@ -195,8 +204,8 @@ function buildQueryString(query?: Record<string, string | number | boolean | und
  *   - 2xx → returns {status, body, idempotentReplay}
  *   - 4xx/5xx with envelope → throws OdinApiError (agent layer
  *     branches on .code)
- *   - 4xx/5xx without envelope → throws a generic Error with the
- *     status code in the message
+ *   - 4xx/5xx without envelope → normalizes detail into OdinApiError
+ *     with the HTTP status and a matching standard code
  *   - network / timeout → throws a generic Error with "timeout" or
  *     "network" in the message
  */
@@ -208,10 +217,7 @@ export async function odinRequest<T = unknown>(
   const method = opts.method ?? "GET";
   const url = `${cfg.baseUrl}${path.startsWith("/") ? path : `/${path}`}${buildQueryString(opts.query)}`;
 
-  const headers: Record<string, string> = {
-    "X-API-Key": cfg.apiKey,
-    Accept: "application/json",
-  };
+  const headers = authHeaders(cfg);
 
   let bodyPayload: string | undefined;
   if (opts.body !== undefined) {
@@ -296,10 +302,10 @@ export async function odinRequest<T = unknown>(
     if (envelope && typeof envelope.code === "string") {
       throw new OdinApiError(resp.status, envelope);
     }
-    const detail =
-      (parsed as { detail?: string })?.detail ??
-      `HTTP ${resp.status}`;
-    throw new Error(`ODIN error ${resp.status} on ${method} ${path}: ${detail}`);
+    const detail = (parsed as { detail?: unknown })?.detail ?? `HTTP ${resp.status}`;
+    const code = ({ 401: "not_authenticated", 403: "permission_denied", 404: "not_found",
+      422: "validation_failed", 429: "rate_limited" } as Record<number, string>)[resp.status] ?? "http_error";
+    throw new OdinApiError(resp.status, { code, detail, retriable: resp.status === 429 });
   }
 
   return {

@@ -118,7 +118,7 @@ describe("client — write path", () => {
     }));
     // New client instance so the version cache is cold for this test's
     // baseUrl — otherwise a prior test may have cached 1.9.0.
-    const staleCfg = { ...cfg, baseUrl: mock.url + "?stale=" + Date.now() };
+    const staleCfg = cfg;
     await assert.rejects(
       async () => {
         await odinPost(staleCfg, "/api/v1/jobs", {
@@ -150,7 +150,7 @@ describe("client — write path", () => {
       json: { detail: "Not Found" },
     }));
     mock.setRoute("POST", "/api/v1/jobs", () => ({ status: 200, json: {} }));
-    const staleCfg = { ...cfg, baseUrl: mock.url + "?very-stale=" + Date.now() };
+    const staleCfg = cfg;
     await assert.rejects(
       async () => {
         await odinPost(staleCfg, "/api/v1/jobs", {
@@ -350,5 +350,56 @@ describe("client — response media types", () => {
     assert.equal(resp.status, 200);
     // Not strictly required that we parse SDP — just that we don't crash.
     assert.ok(resp.body);
+  });
+});
+
+describe("client — ODIN 2.x authentication and errors", () => {
+  test("Bearer-only requests and dry-run version probes carry access JWT without an empty API key", async () => {
+    const bearerCfg = { baseUrl: mock.url, bearerToken: "test-access-jwt", defaultTimeoutMs: 5000 };
+    mock.setRoute("POST", "/api/v1/jobs", () => ({ status: 200, json: { dry_run: true } }));
+    await odinPost(bearerCfg, "/api/v1/jobs", { body: {}, dryRun: true });
+    assert.equal(mock.requests.length, 2);
+    for (const req of mock.requests) {
+      assert.equal(req.headers.authorization, "Bearer test-access-jwt");
+      assert.equal(req.headers["x-api-key"], undefined);
+    }
+  });
+
+  test("explicit API key and Bearer are both forwarded without provider fallback", async () => {
+    mock.setRoute("GET", "/api/v1/printers", () => ({ status: 200, json: [] }));
+    await odinGet({ ...cfg, bearerToken: "test-access-jwt" }, "/api/v1/printers");
+    assert.equal(mock.requests[0].headers.authorization, "Bearer test-access-jwt");
+    assert.equal(mock.requests[0].headers["x-api-key"], cfg.apiKey);
+  });
+
+  test("plain perimeter denial is a structured MCP-compatible API error", async () => {
+    mock.setRoute("GET", "/api/v1/printers", () => ({ status: 401, json: { detail: "Invalid or missing API key" } }));
+    await assert.rejects(() => odinGet(cfg, "/api/v1/printers"), (err: unknown) => {
+      assert.ok(err instanceof OdinApiError);
+      assert.equal(err.code, "not_authenticated");
+      assert.equal(err.status, 401);
+      assert.equal(err.retriable, false);
+      return true;
+    });
+  });
+
+  test("HTTPException structured details and validation fields survive intact", async () => {
+    const detail = { reason: "education_managed", job_id: 7 };
+    mock.setRoute("POST", "/api/v1/jobs", () => ({ status: 409, json: { detail, error: { code: "http_error", detail, retriable: false } } }));
+    await assert.rejects(() => odinPost(cfg, "/api/v1/jobs", { body: {} }), (err: unknown) => {
+      assert.ok(err instanceof OdinApiError);
+      assert.deepEqual(err.detail, detail);
+      assert.match(err.message, /education_managed/);
+      return true;
+    });
+    mock.setRoute("POST", "/api/v1/jobs", () => ({ status: 422, json: {
+      detail: [{ loc: ["body", "item_name"], msg: "Field required" }],
+      error: { code: "validation_failed", detail: "Request validation failed", retriable: false, fields: ["body.item_name"] },
+    } }));
+    await assert.rejects(() => odinPost(cfg, "/api/v1/jobs", { body: {} }), (err: unknown) => {
+      assert.ok(err instanceof OdinApiError);
+      assert.deepEqual(err.extra.fields, ["body.item_name"]);
+      return true;
+    });
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Minimal ODIN backend mock for MCP integration tests.
+ * In-process ODIN HTTP mock (no listening sockets) for MCP integration tests.
  *
  * Goals:
  *   - Deterministic: every request records a full trace so tests
@@ -11,9 +11,6 @@
  *     the real backend returns so client.ts error parsing is
  *     exercised end-to-end.
  */
-
-import { createServer, IncomingMessage, ServerResponse, Server } from "node:http";
-import { AddressInfo } from "node:net";
 
 export interface RecordedRequest {
   method: string;
@@ -38,23 +35,7 @@ export interface MockServer {
   reset: () => void;
 }
 
-function readRequestBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (c) => chunks.push(c));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
-  });
-}
-
-function normalizeHeaders(raw: IncomingMessage["headers"]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (v === undefined) continue;
-    out[k.toLowerCase()] = Array.isArray(v) ? v.join(", ") : String(v);
-  }
-  return out;
-}
+let nextServer = 0;
 
 export async function startMockServer(): Promise<MockServer> {
   const routes = new Map<string, RouteHandler>();
@@ -62,95 +43,48 @@ export async function startMockServer(): Promise<MockServer> {
 
   const keyFor = (method: string, path: string) => `${method.toUpperCase()} ${path}`;
 
-  // Default handler for the version-sniff endpoint. Returns 1.9.0 so
+  // Default handler for the version-sniff endpoint. Returns 2.0.13 so
   // the client's dry_run safety gate (v2.1.0) is satisfied by default.
   // Individual tests can override via setRoute to simulate pre-1.9.0
   // backends.
   routes.set(keyFor("GET", "/api/v1/version"), () => ({
     status: 200,
-    json: { version: "1.9.0" },
+    json: { version: "2.0.13" },
   }));
 
-  const server: Server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    const rawBody = await readRequestBody(req);
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const query: Record<string, string> = {};
-    url.searchParams.forEach((v, k) => {
-      query[k] = v;
-    });
-    let parsedBody: unknown = undefined;
-    const ct = String(req.headers["content-type"] ?? "").toLowerCase();
-    if (ct.includes("application/json") && rawBody) {
-      try {
-        parsedBody = JSON.parse(rawBody);
-      } catch {
-        parsedBody = undefined;
-      }
-    }
-
+  const url = `http://odin-mock-${++nextServer}.invalid`;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const target = new URL(String(input));
+    if (target.origin !== url) return originalFetch(input, init);
+    const headers = Object.fromEntries(new Headers(init?.headers).entries());
+    const rawBody = String(init?.body ?? "");
+    const query = Object.fromEntries(target.searchParams.entries());
+    let body: unknown;
+    if (rawBody && headers["content-type"]?.includes("application/json")) body = JSON.parse(rawBody);
     const recorded: RecordedRequest = {
-      method: (req.method ?? "GET").toUpperCase(),
-      path: url.pathname,
-      query,
-      headers: normalizeHeaders(req.headers),
-      body: parsedBody,
-      rawBody,
+      method: init?.method ?? "GET", path: target.pathname, query, headers, body, rawBody,
     };
     requests.push(recorded);
-
     const handler = routes.get(keyFor(recorded.method, recorded.path));
-    if (!handler) {
-      res.statusCode = 404;
-      res.setHeader("content-type", "application/json");
-      res.end(
-        JSON.stringify({
-          detail: `No mock route for ${recorded.method} ${recorded.path}`,
-          error: {
-            code: "not_found",
-            detail: `No mock route for ${recorded.method} ${recorded.path}`,
-            retriable: false,
-          },
-        }),
-      );
-      return;
-    }
-
-    try {
-      const result = await handler(recorded);
-      res.statusCode = result.status;
-      for (const [hk, hv] of Object.entries(result.headers ?? {})) {
-        res.setHeader(hk, hv);
-      }
-      if ("json" in result) {
-        if (!res.getHeader("content-type")) {
-          res.setHeader("content-type", "application/json");
-        }
-        res.end(JSON.stringify(result.json));
-      } else {
-        if (!res.getHeader("content-type")) {
-          res.setHeader("content-type", "text/plain");
-        }
-        res.end(result.text);
-      }
-    } catch (err) {
-      res.statusCode = 500;
-      res.setHeader("content-type", "application/json");
-      res.end(
-        JSON.stringify({
-          detail: `mock handler error: ${(err as Error).message}`,
-          error: {
-            code: "internal_error",
-            detail: `mock handler error: ${(err as Error).message}`,
-            retriable: true,
-          },
-        }),
-      );
-    }
-  });
-
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const addr = server.address() as AddressInfo;
-  const url = `http://127.0.0.1:${addr.port}`;
+    const response = async () => {
+      const result = handler ? await handler(recorded) : {
+        status: 404, json: errorEnvelope("not_found", `No mock route for ${recorded.method} ${recorded.path}`),
+      };
+      return new Response("json" in result ? JSON.stringify(result.json) : result.text, {
+        status: result.status,
+        headers: { "content-type": "json" in result ? "application/json" : "text/plain", ...result.headers },
+      });
+    };
+    const signal = init?.signal;
+    if (!signal) return response();
+    signal.throwIfAborted();
+    return new Promise<Response>((resolve, reject) => {
+      const abort = () => reject(new DOMException("Aborted", "AbortError"));
+      signal.addEventListener("abort", abort, { once: true });
+      response().then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    });
+  };
 
   return {
     url,
@@ -166,13 +100,10 @@ export async function startMockServer(): Promise<MockServer> {
       // can still override after calling reset().
       routes.set(keyFor("GET", "/api/v1/version"), () => ({
         status: 200,
-        json: { version: "1.9.0" },
+        json: { version: "2.0.13" },
       }));
     },
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      }),
+    close: async () => { globalThis.fetch = originalFetch; },
   };
 }
 

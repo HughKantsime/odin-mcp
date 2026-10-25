@@ -13,7 +13,7 @@
 
 import { z } from "zod/v4";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { loadClientFromEnv, odinGet, OdinApiError } from "../client.js";
+import { loadClientFromEnv, odinGet, OdinApiError, type OdinClientConfig } from "../client.js";
 
 function errorToResult(err: unknown) {
   if (err instanceof OdinApiError) {
@@ -60,6 +60,44 @@ function okResult(body: unknown, replay: boolean) {
   };
 }
 
+type Row = Record<string, unknown>;
+
+// Match ODIN's protocol-neutral state vocabulary and 90-second heartbeat rule.
+function printerState(printer: Row): string {
+  const state = String(printer.gcode_state ?? "").trim().toUpperCase();
+  const timestamp = String(printer.last_seen ?? "").trim();
+  const lastSeen = Date.parse(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(timestamp) ? timestamp : `${timestamp}Z`);
+  const age = Date.now() - lastSeen;
+  if (state === "OFFLINE" || !Number.isFinite(lastSeen) || age < 0 || age >= 90_000) return "offline";
+  if (["RUNNING", "PRINTING", "PREPARE"].includes(state)) return "printing";
+  if (["PAUSE", "PAUSED"].includes(state)) return "paused";
+  if (["FAILED", "ERROR"].includes(state)) return "error";
+  if (["IDLE", "FINISH", "READY"].includes(state)) return "idle";
+  return "unknown";
+}
+
+// ODIN jobs and alerts return bare arrays with limit/offset pagination.
+async function allPages(cfg: OdinClientConfig, path: string, query: Record<string, string | number | boolean> = {}): Promise<Row[]> {
+  const rows: Row[] = [];
+  const limit = 500;
+  for (let offset = 0; ; offset += limit) {
+    const { body } = await odinGet<Row[]>(cfg, path, { query: { ...query, limit, offset } });
+    rows.push(...body);
+    if (body.length < limit) return rows;
+  }
+}
+
+async function readQueue(cfg: OdinClientConfig): Promise<Row[]> {
+  const [pending, scheduled] = await Promise.all([
+    allPages(cfg, "/api/v1/jobs", { status: "pending" }),
+    allPages(cfg, "/api/v1/jobs", { status: "scheduled" }),
+  ]);
+  return [...pending, ...scheduled].sort((a, b) =>
+    Number(a.priority ?? 3) - Number(b.priority ?? 3) ||
+    Number(a.queue_position ?? Infinity) - Number(b.queue_position ?? Infinity) ||
+    String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) || Number(a.id) - Number(b.id));
+}
+
 export function registerReadTools(server: McpServer): void {
   const _client = () => loadClientFromEnv();
 
@@ -80,12 +118,8 @@ export function registerReadTools(server: McpServer): void {
     async ({ status_filter }) => {
       try {
         const cfg = _client();
-        const { body, idempotentReplay } = await odinGet<unknown[]>(
-          cfg,
-          "/api/v1/printers",
-          { query: { status: status_filter } },
-        );
-        return okResult({ printers: body }, idempotentReplay);
+        const { body, idempotentReplay } = await odinGet<Row[]>(cfg, "/api/v1/printers");
+        return okResult({ printers: status_filter ? body.filter(p => printerState(p) === status_filter) : body }, idempotentReplay);
       } catch (err) {
         return errorToResult(err);
       }
@@ -97,7 +131,7 @@ export function registerReadTools(server: McpServer): void {
     "get_printer",
     {
       description:
-        "Full status of a single printer — telemetry, active job, AMS slots, temperatures.",
+        "Printer record with persisted telemetry, filament slots and temperatures.",
       inputSchema: {
         id: z.number().int().positive().describe("Printer ID"),
       },
@@ -122,7 +156,7 @@ export function registerReadTools(server: McpServer): void {
         "what's currently printing, what recently failed, etc.",
       inputSchema: {
         status_filter: z
-          .enum(["pending", "submitted", "queued", "printing", "completed", "failed", "cancelled", "paused"])
+          .enum(["pending", "submitted", "scheduled", "rejected", "printing", "completed", "failed", "cancelled", "paused"])
           .optional(),
         limit: z.number().int().min(1).max(500).default(100),
       },
@@ -162,16 +196,13 @@ export function registerReadTools(server: McpServer): void {
   server.registerTool(
     "list_queue",
     {
-      description: "List pending/queued jobs ordered by priority.",
+      description: "List all pending and scheduled jobs ordered by priority, queue position and age.",
       inputSchema: {},
     },
     async () => {
       try {
         const cfg = _client();
-        const { body, idempotentReplay } = await odinGet(cfg, "/api/v1/jobs", {
-          query: { status: "pending" },
-        });
-        return okResult({ queue: body }, idempotentReplay);
+        return okResult({ queue: await readQueue(cfg) }, false);
       } catch (err) {
         return errorToResult(err);
       }
@@ -186,12 +217,14 @@ export function registerReadTools(server: McpServer): void {
       inputSchema: {
         severity: z.enum(["info", "warning", "critical"]).optional(),
         unread_only: z.boolean().default(false),
+        limit: z.number().int().min(1).max(500).default(100),
+        offset: z.number().int().min(0).default(0),
       },
     },
-    async ({ severity, unread_only }) => {
+    async ({ severity, unread_only, limit, offset }) => {
       try {
         const cfg = _client();
-        const query: Record<string, string | number | boolean | undefined> = {};
+        const query: Record<string, string | number | boolean | undefined> = { limit, offset };
         if (severity) query.severity = severity;
         if (unread_only) query.is_read = false;
         const { body, idempotentReplay } = await odinGet(cfg, "/api/v1/alerts", { query });
@@ -221,13 +254,11 @@ export function registerReadTools(server: McpServer): void {
     async ({ filament_type, available_only }) => {
       try {
         const cfg = _client();
-        const { body, idempotentReplay } = await odinGet(cfg, "/api/v1/spools", {
-          query: {
-            filament_type: filament_type,
-            available_only: available_only ? true : undefined,
-          },
-        });
-        return okResult({ spools: body }, idempotentReplay);
+        const { body, idempotentReplay } = await odinGet<Row[]>(cfg, "/api/v1/spools");
+        const spools = body.filter(spool =>
+          (!filament_type || String(spool.filament_material ?? "").toLowerCase() === filament_type.toLowerCase()) &&
+          (!available_only || spool.location_printer_id == null));
+        return okResult({ spools }, idempotentReplay);
       } catch (err) {
         return errorToResult(err);
       }
@@ -256,7 +287,7 @@ export function registerReadTools(server: McpServer): void {
   server.registerTool(
     "list_maintenance_tasks",
     {
-      description: "List printer maintenance tasks (nozzle changes, belt tension, etc).",
+      description: "List maintenance templates; overdue_only returns overdue per-printer task health with task_id and printer_id.",
       inputSchema: {
         overdue_only: z.boolean().default(false),
       },
@@ -264,9 +295,14 @@ export function registerReadTools(server: McpServer): void {
     async ({ overdue_only }) => {
       try {
         const cfg = _client();
-        const { body, idempotentReplay } = await odinGet(cfg, "/api/v1/maintenance/tasks", {
-          query: { overdue: overdue_only ? true : undefined },
-        });
+        if (overdue_only) {
+          const { body } = await odinGet<Array<Row & { tasks: Row[] }>>(cfg, "/api/v1/maintenance/status");
+          const tasks = body.flatMap(printer => printer.tasks
+            .filter(task => task.status === "overdue")
+            .map(task => ({ ...task, printer_id: printer.printer_id, printer_name: printer.printer_name })));
+          return okResult({ tasks }, false);
+        }
+        const { body, idempotentReplay } = await odinGet(cfg, "/api/v1/maintenance/tasks");
         return okResult({ tasks: body }, idempotentReplay);
       } catch (err) {
         return errorToResult(err);
@@ -281,7 +317,7 @@ export function registerReadTools(server: McpServer): void {
       description: "List customer orders / print requests.",
       inputSchema: {
         status_filter: z
-          .enum(["pending", "in_progress", "completed", "shipped", "cancelled"])
+          .enum(["pending", "in_progress", "partial", "fulfilled", "shipped", "cancelled"])
           .optional(),
       },
     },
@@ -289,7 +325,7 @@ export function registerReadTools(server: McpServer): void {
       try {
         const cfg = _client();
         const { body, idempotentReplay } = await odinGet(cfg, "/api/v1/orders", {
-          query: { status: status_filter },
+          query: { status_filter },
         });
         return okResult({ orders: body }, idempotentReplay);
       } catch (err) {
@@ -315,15 +351,15 @@ export function registerReadTools(server: McpServer): void {
         // the tool layer assembles it. Each call is independent.
         const [printers, queue, alerts, jobs] = await Promise.all([
           odinGet<unknown[]>(cfg, "/api/v1/printers"),
-          odinGet<unknown[]>(cfg, "/api/v1/jobs", { query: { status: "pending" } }),
-          odinGet<unknown[]>(cfg, "/api/v1/alerts", { query: { is_read: false } }),
-          odinGet<unknown[]>(cfg, "/api/v1/jobs", { query: { status: "printing" } }),
+          readQueue(cfg),
+          allPages(cfg, "/api/v1/alerts", { is_read: false }),
+          allPages(cfg, "/api/v1/jobs", { status: "printing" }),
         ]);
 
         const printerList = printers.body ?? [];
         const stateCounts: Record<string, number> = {};
         for (const p of printerList as Array<Record<string, unknown>>) {
-          const state = String((p as { status?: string }).status ?? "unknown");
+          const state = printerState(p);
           stateCounts[state] = (stateCounts[state] ?? 0) + 1;
         }
 
@@ -331,9 +367,9 @@ export function registerReadTools(server: McpServer): void {
           {
             printer_count: printerList.length,
             printer_states: stateCounts,
-            queue_depth: (queue.body as unknown[] | undefined)?.length ?? 0,
-            unread_alerts: (alerts.body as unknown[] | undefined)?.length ?? 0,
-            active_jobs: (jobs.body as unknown[] | undefined)?.length ?? 0,
+            queue_depth: queue.length,
+            unread_alerts: alerts.length,
+            active_jobs: jobs.length,
           },
           false,
         );

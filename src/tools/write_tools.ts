@@ -1,11 +1,10 @@
 /**
- * Write tools — require scope `agent:write` (or admin). Every tool
+ * Write tools — require token scope and the owning user’s RBAC action permission. Every tool
  * accepts `dry_run: boolean` and an optional `idempotency_key`.
  *
  * - `dry_run: true` sets the X-Dry-Run header; the backend returns
  *   `{dry_run: true, would_execute: {...}}` without committing. If
- *   the route hasn't opted in yet, the request proceeds normally
- *   (per Phase 1 infrastructure-only design).
+ *   the route has not opted in, ODIN refuses with dry_run_unsupported.
  * - `idempotency_key` defaults to a fresh UUID per call. Pass a
  *   stable value across retries so the backend dedupes.
  *
@@ -97,7 +96,7 @@ export function registerWriteTools(server: McpServer): void {
       inputSchema: {
         model_id: z.number().int().positive().describe("Model from the library"),
         item_name: z.string().min(1).max(200).optional().describe("Display name for the queued job"),
-        quantity: z.number().int().min(1).max(100).default(1),
+        quantity: z.number().int().min(1).max(10_000).default(1),
         priority: z.number().int().min(0).max(10).default(3),
         notes: z.string().max(500).optional(),
         ...writeControls,
@@ -128,18 +127,16 @@ export function registerWriteTools(server: McpServer): void {
   server.registerTool(
     "cancel_job",
     {
-      description: "Cancel a pending / queued / printing job.",
+      description: "Cancel a pending or scheduled job. Printing jobs cannot be cancelled through this endpoint.",
       inputSchema: {
         job_id: z.number().int().positive(),
-        reason: z.string().max(500).optional(),
         ...writeControls,
       },
     },
-    async ({ job_id, reason, dry_run, idempotency_key }) => {
+    async ({ job_id, dry_run, idempotency_key }) => {
       try {
         const cfg = _client();
         const { body, idempotentReplay } = await odinPost(cfg, `/api/v1/jobs/${job_id}/cancel`, {
-          body: { reason },
           dryRun: dry_run,
           idempotencyKey: idempotency_key,
         });
@@ -157,15 +154,13 @@ export function registerWriteTools(server: McpServer): void {
       description: "Approve a submitted job (for approval-workflow farms).",
       inputSchema: {
         job_id: z.number().int().positive(),
-        notes: z.string().max(500).optional(),
         ...writeControls,
       },
     },
-    async ({ job_id, notes, dry_run, idempotency_key }) => {
+    async ({ job_id, dry_run, idempotency_key }) => {
       try {
         const cfg = _client();
         const { body, idempotentReplay } = await odinPost(cfg, `/api/v1/jobs/${job_id}/approve`, {
-          body: { notes },
           dryRun: dry_run,
           idempotencyKey: idempotency_key,
         });
@@ -183,7 +178,7 @@ export function registerWriteTools(server: McpServer): void {
       description: "Reject a submitted job. Reason is required and shown to the submitter.",
       inputSchema: {
         job_id: z.number().int().positive(),
-        reason: z.string().min(1).max(500),
+        reason: z.string().trim().min(1).max(500),
         ...writeControls,
       },
     },
@@ -306,7 +301,7 @@ export function registerWriteTools(server: McpServer): void {
       inputSchema: {
         spool_id: z.number().int().positive(),
         printer_id: z.number().int().positive(),
-        ams_slot: z.number().int().min(0).max(15).optional().describe("AMS slot index; omit for non-AMS printers."),
+        ams_slot: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional().describe("One-based FilamentSlot.slot_number from get_printer; includes AMS HT and virtual slots. Defaults to 1."),
         ...writeControls,
       },
     },
@@ -358,8 +353,8 @@ export function registerWriteTools(server: McpServer): void {
       description: "Log completion of a maintenance task (ODIN's maintenance-logs model).",
       inputSchema: {
         printer_id: z.number().int().positive(),
-        task_id: z.number().int().positive(),
-        task_name: z.string().min(1).max(200),
+        task_id: z.number().int().positive().optional(),
+        task_name: z.string().trim().min(1).max(200),
         notes: z.string().max(500).optional(),
         ...writeControls,
       },
