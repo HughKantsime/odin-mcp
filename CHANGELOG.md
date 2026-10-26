@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.2.0] - 2026-10-26
+
+### Changed — ODIN 2.0.x compatibility
+
+- Tool requests and responses match the ODIN 2.0.x API (checked against 2.0.18): job list paging (limit 500), job quantity cap (10,000), order `status_filter` values, 1-indexed AMS slots, maintenance status and spool fields.
+- `list_printers` uses ODIN's own state rule: online printers that aren't printing, paused or in error count as idle; `UNKNOWN` counts as error.
+- `list_spools` with `available_only` returns only active spools not loaded in a printer.
+- **Breaking for MCP callers:** `cancel_job` and `approve_job` no longer accept `reason`/`notes` (ODIN never read them), and `ams_slot` 0 is rejected (slots are 1-indexed).
+- The dry-run safety gate and backend version check (ODIN 1.9.0 or newer) are unchanged.
+
 ## [2.1.1] - 2026-05-21
 
 ### Fixed — live tool backend contracts
